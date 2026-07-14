@@ -14,7 +14,14 @@ jobs:
       - name: Install deps
         run: pip install -r requirements.txt pyinstaller
       - name: Build exe
-        run: pyinstaller --onefile --windowed --name "RajVideoToolkit" --collect-all customtkinter --collect-all google --collect-all imageio_ffmpeg main.py
+        run: >
+          pyinstaller --onefile --windowed --name "RajVideoToolkit"
+          --collect-all customtkinter
+          --collect-all google.genai
+          --collect-all imageio_ffmpeg
+          --collect-all cv2
+          --hidden-import=PIL._tkinter_finder
+          main.py
       - name: Upload exe
         uses: actions/upload-artifact@v4
         with:
