@@ -1,5 +1,2 @@
 customtkinter
-google-genai
-opencv-python-headless
-Pillow
 imageio-ffmpeg
