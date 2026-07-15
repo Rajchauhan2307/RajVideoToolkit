@@ -149,6 +149,7 @@ def concat_lossless(paths, out_path, log):
 
 
 def concat_with_transition(paths, out_path, trans, dur, quality, log):
+    """Chain xfade across N clips."""
     ff = _ffmpeg_exe()
     n = len(paths)
     if n == 1:
@@ -188,6 +189,7 @@ def concat_with_transition(paths, out_path, trans, dur, quality, log):
         if i < n - 1:
             offset += durs[i] - dur
 
+    # audio: crossfade chain so audio length matches video exactly
     alast = "0:a"
     for i in range(1, n):
         albl = "ax%d" % i
@@ -202,7 +204,8 @@ def concat_with_transition(paths, out_path, trans, dur, quality, log):
     if r.returncode == 0 and os.path.exists(out_path):
         return True
 
-    fc2 = [x for x in fc if "acrossfade" not in x and "anull" not in x]
+    # retry video-only (some clips may have no audio)
+    fc2 = fc[:-1]
     cmd2 = [ff, "-y"]
     for p in paths:
         cmd2 += ["-i", p]
@@ -214,6 +217,7 @@ def concat_with_transition(paths, out_path, trans, dur, quality, log):
 
 
 def make_preview(v1, v2, trans, dur, out_path, log):
+    """Short clip showing the actual join: tail of v1 + head of v2."""
     ff = _ffmpeg_exe()
     d1 = probe_duration(v1) or 3.0
     tail = min(2.5, max(dur + 0.6, d1 * 0.5))
@@ -277,21 +281,26 @@ def extract_frames(video, mode, value, out_root, log):
     pattern = os.path.join(outdir, "frame_%03d.jpg")
 
     if mode.startswith("Smart"):
-        run_cmd([ff, "-y", "-i", video, "-vf",
-                 "select='gt(scene,0.25)',scale=1280:-2", "-vsync", "vfr",
-                 "-q:v", "2", pattern])
-        if len([f for f in os.listdir(outdir) if f.endswith(".jpg")]) < 3:
-            run_cmd([ff, "-y", "-i", video, "-vf",
-                     "fps=1/2,scale=1280:-2", "-q:v", "2", pattern])
+        cmd = [ff, "-y", "-i", video, "-vf",
+               "select='gt(scene,0.25)',scale=1280:-2", "-vsync", "vfr",
+               "-q:v", "2", pattern]
+        r = run_cmd(cmd)
+        got = len(os.listdir(outdir))
+        if got < 3:
+            cmd = [ff, "-y", "-i", video, "-vf",
+                   "fps=1/2,scale=1280:-2", "-q:v", "2", pattern]
+            r = run_cmd(cmd)
     elif mode.startswith("Every"):
-        run_cmd([ff, "-y", "-i", video, "-vf",
-                 "fps=1/" + str(value) + ",scale=1280:-2", "-q:v", "2", pattern])
+        cmd = [ff, "-y", "-i", video, "-vf",
+               "fps=1/" + str(value) + ",scale=1280:-2", "-q:v", "2", pattern]
+        r = run_cmd(cmd)
     else:
         d = probe_duration(video) or 10.0
         step = max(d / (value + 1), 0.05)
-        run_cmd([ff, "-y", "-i", video, "-vf",
-                 "fps=1/" + str(round(step, 3)) + ",scale=1280:-2",
-                 "-frames:v", str(value), "-q:v", "2", pattern])
+        cmd = [ff, "-y", "-i", video, "-vf",
+               "fps=1/" + str(round(step, 3)) + ",scale=1280:-2",
+               "-frames:v", str(value), "-q:v", "2", pattern]
+        r = run_cmd(cmd)
 
     n = len([f for f in os.listdir(outdir) if f.endswith(".jpg")])
     log("   " + stem + " -> " + str(n) + " frames")
@@ -526,4 +535,69 @@ class App(ctk.CTk):
                 self.log("Preview ready - khul raha hai...")
                 try:
                     os.startfile(out)
-              
+                except Exception:
+                    self.log("Kholo: " + out)
+            else:
+                self.log("Preview fail hua.")
+
+        self._run_thread(work)
+
+    def run_merge(self):
+        self._save()
+        folder = self.merge_folder
+        out_folder = self.merge_out or folder
+        if not folder:
+            self.log("Source folder select karo.")
+            return
+        trans = self._trans_name()
+        dur = round(float(self.dur_slider.get()), 2)
+        quality = self.qual_menu.get()
+        try:
+            bs = int(self.batch_entry.get())
+        except Exception:
+            bs = 5
+
+        def work():
+            vids = list_videos(folder)
+            if not vids:
+                self.log("Folder me koi video nahi mili.")
+                return
+            self.log(str(len(vids)) + " videos | batch " + str(bs) +
+                     " | " + trans + " | " + quality)
+            made, total = batch_merge(vids, bs, out_folder, trans, dur, quality,
+                                      self.log, self.set_progress)
+            self.log("DONE -> " + str(made) + "/" + str(total) + " videos in " + out_folder)
+
+        self._run_thread(work)
+
+    def run_frames(self):
+        folder = self.fx_folder
+        out_folder = self.fx_out or folder
+        if not folder:
+            self.log("Source folder select karo.")
+            return
+        mode = self.fx_mode.get()
+        try:
+            val = int(self.fx_value.get())
+        except Exception:
+            val = 10
+
+        def work():
+            vids = list_videos(folder)
+            if not vids:
+                self.log("Folder me koi video nahi mili.")
+                return
+            self.log(str(len(vids)) + " videos | " + mode)
+            os.makedirs(out_folder, exist_ok=True)
+            total = 0
+            for i, v in enumerate(vids, 1):
+                self.log("[" + str(i) + "/" + str(len(vids)) + "] " + os.path.basename(v))
+                total += extract_frames(v, mode, val, out_folder, self.log)
+                self.set_progress(i / len(vids))
+            self.log("DONE -> " + str(total) + " frames in " + out_folder)
+
+        self._run_thread(work)
+
+
+if __name__ == "__main__":
+    App().mainloop()
